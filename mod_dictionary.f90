@@ -1,107 +1,112 @@
-module mod_list
-    use, intrinsic :: iso_fortran_env, only: rp=>real32
+module mod_dictionary
+    use, intrinsic :: iso_fortran_env, only: rp=>real32, stdout=>output_unit
     implicit none
     private
 
-    public :: list, node
+    public :: list, node, knode
+
+    character(*), parameter :: fmt_int  = '(I5)'
+    character(*), parameter :: fmt_real = '(F5.1)'
 
     type :: node
-        character(len=:), allocatable :: key
-        class(*),         allocatable :: value
-        type(node), pointer :: next  => null()
+        class(*),    pointer :: value => null()
+        class(node), pointer :: next  => null()
     contains
+        procedure :: str => node_str
         procedure :: print => node_print
-        final :: node_finalize
+        final     :: node_finalize
     end type node
-
+    !
+    type, extends(node) :: knode
+        character(len=:), allocatable :: key
+    contains
+        procedure :: print => knode_print
+        final     :: knode_finalize
+    end type knode
+    !
     type :: list
         integer :: size = 0
-        type(node), pointer :: head => null()
-        type(node), pointer :: tail => null()
+        class(node), pointer :: head => null()
+        class(node), pointer :: tail => null()
     contains
+        procedure :: print => list_print
         procedure :: length
         procedure :: first
         procedure :: last
         procedure :: append
-        procedure :: print => list_print
         final     :: list_finalize
     end type list
     !
 contains
     !
-    subroutine node_print(self)
-        class(node), intent(in) :: self
+    function node_str(self) result(str)
+        class(node), intent(in)   :: self
+        character(:), allocatable :: str
+        !
+        character(len=128) :: str_val
         !
         select type(value=>self%value)
         type is (integer)
-            write(*,1) self%key,value
+            write(str_val,fmt_int) value
         type is (real)
-            write(*,2) self%key,value
+            write(str_val,fmt_real) value
         type is (logical)
-            write(*,3) self%key,value
+            write(str_val,'(L)') value
         type is (character(*))
-            write(*,4) self%key,value
-        type is (list)
-            write(*,*) "--- ",self%key," ---"
-            call value%print
-            write(*,*) "----------------------"
+            write(str_val,'(A)') value
         class default
-            write(*,*) "unknown"
+            str_val = "unknown"
         end select
         !
-1 format(A,':',1x,I5,1x,'integer')
-2 format(A,':',1x,F5.1,1x,'real')
-3 format(A,':',1x,L,1x,'bool')
-4 format(A,':',1x,A,1x,'string')
-        !
+        str = trim(str_val)
+    end function node_str
+    !
+    subroutine node_print(self)
+        class(node), intent(in) :: self
+        write(stdout,*) self%str()
     end subroutine node_print
     !
-    subroutine node_finalize(self)
-        type(node), intent(inout) :: self
-        
-        write(*,*) "+++ deleting node ", self%key, allocated(self%value)
-        if(allocated(self%value)) deallocate(self%value)
-        if(allocated(self%key))   deallocate(self%key)
-        nullify(self%next)
-    end subroutine node_finalize
+    subroutine knode_print(self)
+        class(knode), intent(in) :: self
+        write(stdout,100) self%key, self%str()
+100 format(A,':',1x,A)
+    end subroutine knode_print
+    !
+    subroutine list_print(self)
+        class(list), intent(in) :: self
+        class(node), pointer :: current_ptr
+        !
+        write(stdout,*) "Printing list with ",self%size, " elements"
+        current_ptr => self%head
+        do while(associated(current_ptr))
+            call current_ptr%print
+            current_ptr => current_ptr%next
+        enddo
+    end subroutine list_print
     !
     pure function length(self) result(size)
         class(list), intent(in) :: self
         integer :: size
-
         size = self%size
     end function length
     !
     function first(self)
         class(list), intent(in) :: self
-        type(node), pointer :: first
-        !
+        class(node), pointer :: first
         first => self%head
     end function first
     !
     function last(self)
         class(list), intent(in) :: self
-        type(node), pointer :: last
-        !
+        class(node), pointer :: last
         last => self%tail
     end function last
     !
-    subroutine append(self, key, value)
+    subroutine append(self, node_ptr)
         class(list), intent(inout) :: self
-        character(len=*),   intent(in)    :: key
-        class(*),           intent(in)    :: value
-        !
-        type(node), pointer :: node_ptr
-        !
-        ! I'm not sure if the target keeps allocated on return ¿?
-        ! It seems to work with GNU compiler
-        allocate(node_ptr)
-!        node_ptr = node(key,value)
-        node_ptr%key = key
-        node_ptr%value = value
+        class(node), pointer, intent(in) :: node_ptr
         !
         self%size = self%size + 1
-        !
         if(associated(self%tail)) then
             self%tail%next => node_ptr
         else
@@ -110,27 +115,27 @@ contains
         self%tail => node_ptr
     end subroutine append
     !
-    subroutine list_print(self)
-        class(list), intent(in) :: self
-        !
-        type(node), pointer :: current_ptr
-        !
-        current_ptr => self%head
-        !
-        do while(associated(current_ptr))
-            call current_ptr%print
-            current_ptr => current_ptr%next
-        enddo
-    end subroutine list_print
+    !*** Finalize
+    !
+    subroutine node_finalize(self)
+        type(node), intent(inout) :: self
+        write(*,*) "+++ delete node"
+        if(associated(self%value)) deallocate(self%value)
+        nullify(self%next)
+    end subroutine node_finalize
+    !
+    subroutine knode_finalize(self)
+        type(knode), intent(inout) :: self
+        write(*,*) "+++ delete knode"
+        if(allocated(self%key)) deallocate(self%key)
+    end subroutine knode_finalize
     !
     subroutine list_finalize(self)
         type(list), intent(inout) :: self
+        class(node), pointer :: current_ptr, tmp_ptr
         !
-        type(node), pointer :: current_ptr, tmp_ptr
-        !
+        write(*,*) "+++ delete list"
         current_ptr => self%head
-        !
-        write(*,*) "+++ deleting list"
         do while(associated(current_ptr))
             self%size = self%size - 1
             nullify(tmp_ptr)
@@ -143,4 +148,4 @@ contains
         nullify(self%tail)
     end subroutine list_finalize
     !
-end module mod_list
+end module mod_dictionary
